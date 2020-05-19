@@ -1,0 +1,11 @@
+# extract chromosomal position and ESNT for each transcript.
+cut -f1,2,3,5 -d $'\t' knownCanonical.txt > knownCanonical.bed
+
+# intersect knownCanonical.bed with eCLIP narrow peaks
+bedtools intersect -a knownCanonical.bed -b ~/seqdata/eclip_bed/762.01v02.IDR.out.0102merged.bed.blacklist_removed.bed.narrowPeak.bed -wo
+
+# run for all file
+for f in ~/seqdata/eclip_bed/*; do     bedtools intersect -a knownCanonical.bed -b $f -wo > ${f%.*}; done
+
+# parse transcript type
+cut -d $'\t' -f 9 497_transcript.gff3 | cut -d ";" -f 5 | sort | uniq
