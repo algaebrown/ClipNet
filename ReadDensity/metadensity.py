@@ -4,15 +4,16 @@ import sys
 sys.path.append('/home/hsher/rbp-maps/maps/')
 from density.ReadDensity import ReadDensity
 import os
-from metadensity import *
 from pybedtools import BedTool
 import matplotlib.pyplot as plt
 import numpy as np
 basedir = '/home/hsher/seqdata/eclip_raw/'
-
+from scipy.stats import entropy
 
 
 transcript = BedTool('/home/hsher/projects/gencode_transcript.gff3')
+gencode_feature = BedTool('/home/hsher/projects/gencode_combine_sorted.gff3')
+
 def make_density(series, basedir = basedir):
     ''' Generate 3 ReadDensity Object from pd.Series from encode_data_id.pickle'''
     all_den = []
@@ -175,7 +176,7 @@ class Metagene:
 
     
 
-gencode_feature = BedTool('/home/hsher/projects/gencode_combine_sorted.gff3')
+
 def Build_many_metagene(key_transcript, gencode_feature = gencode_feature, sample_no = 200):
     ''' Create Metagene object for regions for key transcript '''
     if len(key_transcript)< sample_no:
@@ -253,42 +254,37 @@ def trim_or_pad(density, target_length, align = 'left', pad_value = 0):
         return density
 
 
+######################################## Probability Distribution #########################################
+def bind_strength_discretize(density_array, bins = 8, ymax = 0.03):
+    ''' given density array(sample * length of feature), count discretization'''
+    pseudocount = [np.histogram(d[~np.isnan(d)], range = (0, ymax), bins = bins)[0] + 1 for d in density_array.T] # pseudocount 
+    den_prob = np.stack([p/np.sum(p) for p in pseudocount]).T
     
-def meta_density(metagene, eclip):
-    ''' subtract input, normalize # number of exon, normalize at transcript level'''
-    
-    feature_den1 = [] # save minus1 for five_utr, exon, intron, three_utr
-    feature_den2 = []
-    # get density for each feature
-    for feature in [metagene.five_utr, metagene.exon, metagene.intron, metagene.three_utr]:
-        
-        if len(feature) == 0:
-            # some transcripts don't have some features
-            minus1 = np.zeros(1)
-            minus2 = np.zeros(1)
-            pass
-        elif len(feature) == 1:
-            feature = list(feature)[0]
-            minus1, minus2 = subtract_input(eclip, metagene.chrom, feature[0], feature[1], metagene.strand)
-            minus1 = np.array(minus1)
-            minus2 = np.array(minus2)
-            
-        else: # more than 1 exon/intron
-            minus1, minus2 = multi_feature_avg(feature, metagene, eclip)
-        
-        feature_den1.append(minus1)
-        feature_den2.append(minus2)
-    
-    # transcript level normalization
-    if np.nansum(np.concatenate(feature_den1))!= 0:
-        n1 = [f/np.nansum(np.concatenate(feature_den1)) for f in feature_den1]
-    else: 
-        n1 = feature_den1
-    if np.nansum(np.concatenate(feature_den2))!= 0:
-        n2 = [f/np.nansum(np.concatenate(feature_den2)) for f in feature_den2]
-    else:
-        n2 = feature_den2
-    
-    return n1, n2
-    
-    
+    return den_prob
+
+def pos_spec_bind_strength(eCLIP, peak_max = 0.03, bins = 20):
+    ''' return probability distribution on \"binding stregth/normalized peak height\" for each position'''
+    bind_strength = {}
+    for k in eCLIP.density_array.keys():
+        bind_strength[k] = bind_strength_discretize(eCLIP.density_array[k], bins = bins, ymax = peak_max)
+    return bind_strength
+######################################### Relative entropy ##########################################
+
+
+def density_array_entropy(f, fn):
+    '''
+    relative entropy for each position, f = positive binding density; fn = negative binding examples's density
+    '''
+    return np.array([entropy(pk = f[1:, pos], qk = fn[1:, pos]) for pos in range(f.shape[1])])
+
+def pos_relative_entropy(eCLIP_prob):
+    '''
+    return relative entropy throughout whole transcripts
+    '''
+    rel_ent = {}
+    for feat in ['five_utr', 'exon', 'intron', 'three_utr']:
+        for align in ['left', 'right']:
+            pos = np.mean(np.array([eCLIP_prob['positive', feat,align, r] for r in ['rep1', 'rep2']]), axis = 0)
+            neg = np.mean(np.array([eCLIP_prob['negative', feat,align, r] for r in ['rep1', 'rep2']]), axis = 0)
+            rel_ent[feat, align] = density_array_entropy(pos, neg)
+    return rel_ent
